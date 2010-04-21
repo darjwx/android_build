@@ -1,22 +1,5 @@
 # Put some miscellaneous rules here
 
-# Build system colors
-#
-# PFX: Prefix "target C++:" in yellow
-# INS: Module "Install:" output color (cyan for ics)
-
-ifneq ($(BUILD_WITH_COLORS),0)
-  CL_PFX="\033[33m"
-  CL_INS="\033[36m"
-  CL_RED="\033[31m"
-  CL_GRN="\033[32m"
-  CL_YLW="\033[33m"
-  CL_BLU="\033[34m"
-  CL_MAG="\033[35m"
-  CL_CYN="\033[36m"
-  CL_RST="\033[0m"
-endif
-
 # HACK: clear LOCAL_PATH from including last build target before calling
 # intermedites-dir-for
 LOCAL_PATH := $(BUILD_SYSTEM)
@@ -51,6 +34,7 @@ unique_product_copy_files_destinations :=
 $(foreach cf,$(unique_product_copy_files_pairs), \
     $(eval _src := $(call word-colon,1,$(cf))) \
     $(eval _dest := $(call word-colon,2,$(cf))) \
+    $(call check-product-copy-files,$(cf)) \
     $(if $(filter $(unique_product_copy_files_destinations),$(_dest)), \
         $(info PRODUCT_COPY_FILES $(cf) ignored.), \
         $(eval _fulldest := $(call append-path,$(PRODUCT_OUT),$(_dest))) \
@@ -96,8 +80,6 @@ ADDITIONAL_DEFAULT_PROPERTIES += \
     $(call collapse-pairs, $(PRODUCT_DEFAULT_PROPERTY_OVERRIDES))
 ADDITIONAL_DEFAULT_PROPERTIES := $(call uniq-pairs-by-first-component, \
     $(ADDITIONAL_DEFAULT_PROPERTIES),=)
-
-.PHONY: $(INSTALLED_BUILD_PROP_TARGET)
 
 intermediate_system_build_prop := $(call intermediates-dir-for,ETC,system_build_prop)/build.prop
 
@@ -145,22 +127,8 @@ endif
 BUILD_VERSION_TAGS += $(BUILD_KEYS)
 BUILD_VERSION_TAGS := $(subst $(space),$(comma),$(sort $(BUILD_VERSION_TAGS)))
 
-# If the final fingerprint should be different than what was used by the build system,
-# we can allow that too.
-ifeq ($(TARGET_VENDOR_PRODUCT_NAME),)
-TARGET_VENDOR_PRODUCT_NAME := $(TARGET_PRODUCT)
-endif
-
-ifeq ($(TARGET_VENDOR_DEVICE_NAME),)
-TARGET_VENDOR_DEVICE_NAME := $(TARGET_DEVICE)
-endif
-
-ifeq ($(TARGET_VENDOR_RELEASE_BUILD_ID),)
-TARGET_VENDOR_RELEASE_BUILD_ID := $(BUILD_NUMBER)
-endif
-
 # A human-readable string that descibes this build in detail.
-build_desc := $(TARGET_VENDOR_PRODUCT_NAME)-$(TARGET_BUILD_VARIANT) $(PLATFORM_VERSION) $(BUILD_ID) $(TARGET_VENDOR_RELEASE_BUILD_ID) $(BUILD_VERSION_TAGS)
+build_desc := $(TARGET_PRODUCT)-$(TARGET_BUILD_VARIANT) $(PLATFORM_VERSION) $(BUILD_ID) $(BUILD_NUMBER_FROM_FILE) $(BUILD_VERSION_TAGS)
 $(intermediate_system_build_prop): PRIVATE_BUILD_DESC := $(build_desc)
 
 # The string used to uniquely identify the combined build and product; used by the OTA server.
@@ -172,7 +140,7 @@ ifeq (,$(strip $(BUILD_FINGERPRINT)))
   else
     BF_BUILD_NUMBER := $(BUILD_NUMBER)
   endif
-  BUILD_FINGERPRINT := $(PRODUCT_BRAND)/$(TARGET_VENDOR_PRODUCT_NAME)/$(TARGET_VENDOR_DEVICE_NAME):$(PLATFORM_VERSION)/$(BUILD_ID)/$(TARGET_VENDOR_RELEASE_BUILD_ID):$(TARGET_BUILD_VARIANT)/$(BUILD_VERSION_TAGS)
+  BUILD_FINGERPRINT := $(PRODUCT_BRAND)/$(TARGET_PRODUCT)/$(TARGET_DEVICE):$(PLATFORM_VERSION)/$(BUILD_ID)/$(BF_BUILD_NUMBER):$(TARGET_BUILD_VARIANT)/$(BUILD_VERSION_TAGS)
 endif
 ifneq ($(words $(BUILD_FINGERPRINT)),1)
   $(error BUILD_FINGERPRINT cannot contain spaces: "$(BUILD_FINGERPRINT)")
@@ -246,10 +214,9 @@ ifneq ($(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_OEM_PROPERTIES),)
 		echo "import /oem/oem.prop $(prop)" >> $@;)
 endif
 	$(hide) TARGET_BUILD_TYPE="$(TARGET_BUILD_VARIANT)" \
-			TARGET_BUILD_FLAVOR="$(TARGET_PRODUCT)-$(TARGET_BUILD_VARIANT)" \
-			TARGET_DEVICE="$(TARGET_VENDOR_DEVICE_NAME)" \
-			CARBON_DEVICE="$(TARGET_DEVICE)" \
-			PRODUCT_NAME="$(TARGET_VENDOR_PRODUCT_NAME)" \
+			TARGET_BUILD_FLAVOR="$(TARGET_BUILD_FLAVOR)" \
+			TARGET_DEVICE="$(TARGET_DEVICE)" \
+			PRODUCT_NAME="$(TARGET_PRODUCT)" \
 			PRODUCT_BRAND="$(PRODUCT_BRAND)" \
 			PRODUCT_DEFAULT_LOCALE="$(call get-default-product-locale,$(PRODUCT_LOCALES))" \
 			PRODUCT_DEFAULT_WIFI_CHANNELS="$(PRODUCT_DEFAULT_WIFI_CHANNELS)" \
@@ -280,9 +247,6 @@ endif
 			TARGET_CPU_ABI="$(TARGET_CPU_ABI)" \
 			TARGET_CPU_ABI2="$(TARGET_CPU_ABI2)" \
 			TARGET_AAPT_CHARACTERISTICS="$(TARGET_AAPT_CHARACTERISTICS)" \
-			TARGET_UNIFIED_DEVICE="$(TARGET_UNIFIED_DEVICE)" \
-			TARGET_SETS_FSTAB="$(TARGET_SETS_FSTAB)" \
-			$(PRODUCT_BUILD_PROP_OVERRIDES) \
 	        bash $(BUILDINFO_SH) >> $@
 	$(hide) $(foreach file,$(system_prop_file), \
 		if [ -f "$(file)" ]; then \
@@ -311,7 +275,7 @@ INSTALLED_RECOVERYIMAGE_TARGET :=
 endif
 
 $(INSTALLED_BUILD_PROP_TARGET): $(intermediate_system_build_prop) $(INSTALLED_RECOVERYIMAGE_TARGET)
-	@echo -e ${CL_CYN}"Target build info:"${CL_RST}" $@"
+	@echo "Target build info: $@"
 	$(hide) cat $(intermediate_system_build_prop) > $@
 ifdef INSTALLED_RECOVERYIMAGE_TARGET
 	$(hide) echo ro.expect.recovery_id=`cat $(RECOVERYIMAGE_ID_FILE)` >> $@
@@ -588,7 +552,6 @@ $(INSTALLED_BOOTIMAGE_TARGET): $(MKBOOTIMG) $(INTERNAL_BOOTIMAGE_FILES) $(BOOT_S
 	$(hide) $(MKBOOTIMG) $(INTERNAL_BOOTIMAGE_ARGS) $(INTERNAL_MKBOOTIMG_VERSION_ARGS) $(BOARD_MKBOOTIMG_ARGS) --output $@
 	$(BOOT_SIGNER) /boot $@ $(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_VERITY_SIGNING_KEY).pk8 $(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_VERITY_SIGNING_KEY).x509.pem $@
 	$(hide) $(call assert-max-image-size,$@,$(BOARD_BOOTIMAGE_PARTITION_SIZE))
-	@echo -e ${CL_CYN}"Made boot image: $@"${CL_RST}
 
 .PHONY: bootimage-nodeps
 bootimage-nodeps: $(MKBOOTIMG) $(BOOT_SIGNER)
@@ -618,14 +581,12 @@ $(INSTALLED_BOOTIMAGE_TARGET): $(MKBOOTIMG) $(INTERNAL_BOOTIMAGE_FILES) $(BOOTIM
 	$(call pretty,"Target boot image: $@")
 	$(hide) $(MKBOOTIMG) $(INTERNAL_BOOTIMAGE_ARGS) $(INTERNAL_MKBOOTIMG_VERSION_ARGS) $(BOARD_MKBOOTIMG_ARGS) --output $@
 	$(hide) $(call assert-max-image-size,$@,$(BOARD_BOOTIMAGE_PARTITION_SIZE))
-	@echo -e ${CL_CYN}"Made boot image: $@"${CL_RST}
 
 .PHONY: bootimage-nodeps
 bootimage-nodeps: $(MKBOOTIMG)
 	@echo "make $@: ignoring dependencies"
 	$(hide) $(MKBOOTIMG) $(INTERNAL_BOOTIMAGE_ARGS) $(INTERNAL_MKBOOTIMG_VERSION_ARGS) $(BOARD_MKBOOTIMG_ARGS) --output $(INSTALLED_BOOTIMAGE_TARGET)
 	$(hide) $(call assert-max-image-size,$(INSTALLED_BOOTIMAGE_TARGET),$(BOARD_BOOTIMAGE_PARTITION_SIZE))
-	@echo -e ${CL_CYN}"Made boot image: $@"${CL_RST}
 
 endif # TARGET_BOOTIMAGE_USE_EXT2
 endif # BOARD_USES_RECOVERY_AS_BOOT
@@ -732,7 +693,7 @@ endif  # TARGET_BUILD_APPS
 $(kernel_notice_file): \
 	    $(BUILD_SYSTEM)/LINUX_KERNEL_COPYING \
 	    | $(ACP)
-	@echo -e ${PRT_INS}"Copying:"${CL_RST}" $@"
+	@echo Copying: $@
 	$(hide) mkdir -p $(dir $@)
 	$(hide) $(ACP) $< $@
 
@@ -891,17 +852,7 @@ ifneq (,$(INSTALLED_RECOVERYIMAGE_TARGET)$(filter true,$(BOARD_USES_RECOVERY_AS_
 INTERNAL_RECOVERYIMAGE_FILES := $(filter $(TARGET_RECOVERY_OUT)/%, \
     $(ALL_DEFAULT_INSTALLED_MODULES))
 
-ifneq ($(TARGET_RECOVERY_INITRC),)
-  recovery_initrc := $(TARGET_RECOVERY_INITRC) # Use target specific init.rc
-else
-  recovery_initrc := $(call include-path-for, recovery)/etc/init.rc
-endif
-ifneq ($(TARGET_PREBUILT_RECOVERY_KERNEL),)
-  recovery_kernel := $(TARGET_PREBUILT_RECOVERY_KERNEL) # Use prebuilt recovery kernel
-else
-  recovery_kernel := $(INSTALLED_KERNEL_TARGET) # same as a non-recovery system
-endif
-recovery_uncompressed_ramdisk := $(PRODUCT_OUT)/ramdisk-recovery.cpio
+recovery_initrc := $(call include-path-for, recovery)/etc/init.rc
 recovery_sepolicy := $(call intermediates-dir-for,ETC,sepolicy.recovery)/sepolicy.recovery
 recovery_kernel := $(INSTALLED_KERNEL_TARGET) # same as a non-recovery system
 recovery_ramdisk := $(PRODUCT_OUT)/ramdisk-recovery.img
@@ -938,17 +889,6 @@ endif
 ifndef TARGET_PRIVATE_RES_DIRS
 TARGET_PRIVATE_RES_DIRS := $(wildcard $(TARGET_DEVICE_DIR)/recovery/res)
 endif
-
-ifneq ($(TARGET_RECOVERY_DEVICE_DIRS),)
-recovery_root_private := $(strip \
-  $(foreach d,$(TARGET_RECOVERY_DEVICE_DIRS), $(wildcard $(d)/recovery/root)))
-else
-recovery_root_private := $(strip $(wildcard $(TARGET_DEVICE_DIR)/recovery/root))
-endif
-ifneq ($(recovery_root_private),)
-recovery_root_deps := $(shell find $(recovery_root_private) -type f)
-endif
-
 recovery_resource_deps := $(shell find $(recovery_resources_common) \
   $(TARGET_PRIVATE_RES_DIRS) -type f)
 ifdef TARGET_RECOVERY_FSTAB
@@ -1010,10 +950,6 @@ ifeq ($(strip $(BOARD_KERNEL_SEPARATED_DT)),true)
   RECOVERYIMAGE_EXTRA_DEPS    := $(INSTALLED_DTIMAGE_TARGET)
 endif
 
-INTERNAL_RECOVERY_FILES := $(filter $(TARGET_RECOVERY_OUT)/%, \
-	$(foreach module, $(ALL_MODULES), $(ALL_MODULES.$(module).INSTALLED)) \
-	$(ALL_DEFAULT_INSTALLED_MODULES))
-
 # Keys authorized to sign OTA packages this build will accept.  The
 # build always uses dev-keys for this; release packaging tools will
 # substitute other keys for this one.
@@ -1027,7 +963,7 @@ DUMPKEY_JAR := $(HOST_OUT_JAVA_LIBRARIES)/dumpkey.jar
 $(RECOVERY_INSTALL_OTA_KEYS): PRIVATE_OTA_PUBLIC_KEYS := $(OTA_PUBLIC_KEYS)
 $(RECOVERY_INSTALL_OTA_KEYS): extra_keys := $(patsubst %,%.x509.pem,$(PRODUCT_EXTRA_RECOVERY_KEYS))
 $(RECOVERY_INSTALL_OTA_KEYS): $(OTA_PUBLIC_KEYS) $(DUMPKEY_JAR) $(extra_keys)
-	@echo -e ${PRT_INS}"DumpPublicKey: $@ <= $(PRIVATE_OTA_PUBLIC_KEYS) $(extra_keys)"${CL_RST}
+	@echo "DumpPublicKey: $@ <= $(PRIVATE_OTA_PUBLIC_KEYS) $(extra_keys)"
 	@rm -rf $@
 	@mkdir -p $(dir $@)
 	java -jar $(DUMPKEY_JAR) $(PRIVATE_OTA_PUBLIC_KEYS) $(extra_keys) > $@
@@ -1035,12 +971,12 @@ $(RECOVERY_INSTALL_OTA_KEYS): $(OTA_PUBLIC_KEYS) $(DUMPKEY_JAR) $(extra_keys)
 RECOVERYIMAGE_ID_FILE := $(PRODUCT_OUT)/recovery.id
 # $(1): output file
 define build-recoveryimage-target
-  @echo -e ${CL_CYN}"----- Making recovery image ------"${CL_RST}
+  @echo ----- Making recovery image ------
   $(hide) mkdir -p $(TARGET_RECOVERY_OUT)
   $(hide) mkdir -p $(TARGET_RECOVERY_ROOT_OUT)/etc $(TARGET_RECOVERY_ROOT_OUT)/sdcard $(TARGET_RECOVERY_ROOT_OUT)/tmp
-  @echo -e ${CL_CYN}"Copying baseline ramdisk..."${CL_RST}
+  @echo Copying baseline ramdisk...
   $(hide) rsync -a --exclude=etc --exclude=sdcard $(IGNORE_CACHE_LINK) $(TARGET_ROOT_OUT) $(TARGET_RECOVERY_OUT) # "cp -Rf" fails to overwrite broken symlinks on Mac.
-  @echo -e ${CL_CYN}"Modifying ramdisk contents..."${CL_RST}
+  @echo Modifying ramdisk contents...
   $(hide) rm -f $(TARGET_RECOVERY_ROOT_OUT)/init*.rc
   $(hide) cp -f $(recovery_initrc) $(TARGET_RECOVERY_ROOT_OUT)/
   $(hide) rm -f $(TARGET_RECOVERY_ROOT_OUT)/sepolicy
@@ -1049,8 +985,7 @@ define build-recoveryimage-target
   $(hide) mkdir -p $(TARGET_RECOVERY_ROOT_OUT)/res
   $(hide) rm -rf $(TARGET_RECOVERY_ROOT_OUT)/res/*
   $(hide) cp -rf $(recovery_resources_common)/* $(TARGET_RECOVERY_ROOT_OUT)/res
-  $(hide) $(foreach item,$(recovery_root_private), \
-    cp -rf $(item) $(TARGET_RECOVERY_OUT)/)
+  $(hide) cp -f $(recovery_font) $(TARGET_RECOVERY_ROOT_OUT)/res/images/font.png
   $(hide) $(foreach item,$(TARGET_PRIVATE_RES_DIRS), \
     cp -rf $(item) $(TARGET_RECOVERY_ROOT_OUT)/$(newline))
   $(hide) $(foreach item,$(recovery_fstab), \
@@ -1080,7 +1015,7 @@ define build-recoveryimage-target
   $(if $(filter true,$(BOARD_USES_RECOVERY_AS_BOOT)), \
     $(hide) $(call assert-max-image-size,$(1),$(BOARD_BOOTIMAGE_PARTITION_SIZE)), \
     $(hide) $(call assert-max-image-size,$(1),$(BOARD_RECOVERYIMAGE_PARTITION_SIZE)))
-  @echo -e ${CL_CYN}"Made recovery image: $@"${CL_RST}
+  @echo ----- Made recovery image: $(1) --------
 endef
 
 ifeq ($(BOARD_USES_RECOVERY_AS_BOOT),true)
@@ -1108,12 +1043,10 @@ $(INSTALLED_RECOVERYIMAGE_TARGET): $(MKBOOTFS) $(MKBOOTIMG) $(MINIGZIP) \
 		$(INTERNAL_RECOVERYIMAGE_FILES) \
 		$(recovery_initrc) $(recovery_sepolicy) $(recovery_kernel) \
 		$(INSTALLED_2NDBOOTLOADER_TARGET) \
-		$(recovery_build_prop) $(recovery_resource_deps) $(recovery_root_deps) \
+		$(recovery_build_prop) $(recovery_resource_deps) \
 		$(recovery_fstab) \
 		$(RECOVERY_INSTALL_OTA_KEYS) $(RECOVERYIMAGE_EXTRA_DEPS)
-ifndef BOARD_CUSTOM_BOOTIMG_MK
 		$(call build-recoveryimage-target, $@)
-endif
 
 ifdef RECOVERY_RESOURCE_ZIP
 $(RECOVERY_RESOURCE_ZIP): $(INSTALLED_RECOVERYIMAGE_TARGET) | $(ZIPTIME)
@@ -1124,7 +1057,7 @@ endif
 
 .PHONY: recoveryimage-nodeps
 recoveryimage-nodeps:
-	@echo -e ${CL_CYN}"make $@: ignoring dependencies"${CL_RST}
+	@echo "make $@: ignoring dependencies"
 	$(call build-recoveryimage-target, $(INSTALLED_RECOVERYIMAGE_TARGET))
 
 else # INSTALLED_RECOVERYIMAGE_TARGET not defined
@@ -1142,10 +1075,6 @@ ifeq ($(BOARD_NAND_SPARE_SIZE),)
 BOARD_NAND_SPARE_SIZE := 64
 endif
 
-ifdef BOARD_CUSTOM_BOOTIMG_MK
-include $(BOARD_CUSTOM_BOOTIMG_MK)
-endif
-
 # -----------------------------------------------------------------
 # system image
 #
@@ -1161,18 +1090,8 @@ INTERNAL_SYSTEMIMAGE_FILES := $(filter $(TARGET_OUT)/%, \
     $(PDK_FUSION_SYSIMG_FILES) \
     $(RECOVERY_RESOURCE_ZIP))
 
-systemimage-squisher: $(INTERNAL_SYSTEMIMAGE_FILES)
-	@echo -e ${CL_YLW}"Optimizing PNGs to Shrink ROM Size!"${CL_RST}
-	$(hide) APKCERTS=$(APKCERTS_FILE) $(SQUISHER_SCRIPT) $@
-
-.PHONY: systemimage-squisher
 
 FULL_SYSTEMIMAGE_DEPS := $(INTERNAL_SYSTEMIMAGE_FILES) $(INTERNAL_USERIMAGES_DEPS)
-
-ifdef BOARD_USES_SYSTEMIMAGE_SQUISHER
-	FULL_SYSTEMIMAGE_DEPS += systemimage-squisher
-endif
-
 # -----------------------------------------------------------------
 # installed file list
 # Depending on anything that $(BUILT_SYSTEMIMAGE) depends on.
@@ -1210,21 +1129,9 @@ define create-system-vendor-symlink
 endef
 endif
 
-# Only Create symlink /system/vendor to /vendor if necessary.
-ifdef BOARD_NEEDS_VENDORIMAGE_SYMLINK
-define create-system-vendor-symlink
-$(hide) if [ -d $(TARGET_OUT)/vendor ] && [ ! -h $(TARGET_OUT)/vendor ]; then \
-  echo 'Non-symlink $(TARGET_OUT)/vendor detected!' 1>&2; \
-  echo 'You cannot install files to $(TARGET_OUT)/vendor while building a separate vendor.img!' 1>&2; \
-  exit 1; \
-fi
-$(hide) ln -sf /vendor $(TARGET_OUT)/vendor
-endef
-endif
-
 # $(1): output file
 define build-systemimage-target
-  @echo -e ${CL_CYN}"Target system fs image: $(1)"${CL_RST}
+  @echo "Target system fs image: $(1)"
   $(call create-system-vendor-symlink)
   @mkdir -p $(dir $(1)) $(systemimage_intermediates) && rm -rf $(systemimage_intermediates)/system_image_info.txt
   $(call generate-userimage-prop-dictionary, $(systemimage_intermediates)/system_image_info.txt, \
@@ -1261,16 +1168,12 @@ SYSTEMIMAGE_SOURCE_DIR := $(TARGET_OUT)
 ifneq ($(INSTALLED_RECOVERYIMAGE_TARGET),)
 ifneq ($(BOARD_USES_FULL_RECOVERY_IMAGE),true)
 intermediates := $(call intermediates-dir-for,PACKAGING,recovery_patch)
-ifndef BOARD_CUSTOM_BOOTIMG_MK
 RECOVERY_FROM_BOOT_PATCH := $(intermediates)/recovery_from_boot.p
-else
-RECOVERY_FROM_BOOT_PATCH :=
-endif
 $(RECOVERY_FROM_BOOT_PATCH): $(INSTALLED_RECOVERYIMAGE_TARGET) \
                              $(INSTALLED_BOOTIMAGE_TARGET) \
 			     $(HOST_OUT_EXECUTABLES)/imgdiff \
 	                     $(HOST_OUT_EXECUTABLES)/bsdiff
-	@echo -e ${CL_CYN}"Construct recovery from boot"${CL_RST}
+	@echo "Construct recovery from boot"
 	mkdir -p $(dir $@)
 	PATH=$(HOST_OUT_EXECUTABLES):$$PATH $(HOST_OUT_EXECUTABLES)/imgdiff $(INSTALLED_BOOTIMAGE_TARGET) $(INSTALLED_RECOVERYIMAGE_TARGET) $@
 else # $(BOARD_USES_FULL_RECOVERY_IMAGE) == true
@@ -1280,7 +1183,7 @@ endif
 
 
 $(INSTALLED_SYSTEMIMAGE): $(BUILT_SYSTEMIMAGE) $(RECOVERY_FROM_BOOT_PATCH) | $(ACP)
-	@echo -e ${CL_CYN}"Install system fs image:"${CL_RST}" $@"
+	@echo "Install system fs image: $@"
 	$(copy-file-to-target)
 	$(hide) $(call assert-max-image-size,$@ $(RECOVERY_FROM_BOOT_PATCH),$(BOARD_SYSTEMIMAGE_PARTITION_SIZE))
 
@@ -1647,6 +1550,9 @@ build_ota_package := true
 ifeq ($(TARGET_SKIP_OTA_PACKAGE),true)
 build_ota_package := false
 endif
+ifeq ($(BUILD_OS),darwin)
+build_ota_package := false
+endif
 ifneq ($(strip $(SANITIZE_TARGET)),)
 build_ota_package := false
 endif
@@ -1780,11 +1686,8 @@ built_ota_tools :=
 
 # We can't build static executables when SANITIZE_TARGET=address
 ifeq ($(strip $(SANITIZE_TARGET)),)
-ifeq ($(TARGET_ARCH),arm64)
-	built_ota_tools += $(call intermediates-dir-for,EXECUTABLES,updater,,,32)/updater
-else
-	built_ota_tools += $(call intermediates-dir-for,EXECUTABLES,updater)/updater
-endif
+built_ota_tools += \
+    $(call intermediates-dir-for,EXECUTABLES,updater,,,$(TARGET_PREFER_32_BIT))/updater
 endif
 
 $(BUILT_TARGET_FILES_PACKAGE): PRIVATE_OTA_TOOLS := $(built_ota_tools)
@@ -1827,7 +1730,7 @@ $(BUILT_TARGET_FILES_PACKAGE): \
 		$(APKCERTS_FILE) \
 		$(HOST_OUT_EXECUTABLES)/fs_config \
 		| $(ACP)
-	@echo -e ${CL_YLW}"Package target files:"${CL_RST}" $@"
+	@echo "Package target files: $@"
 	$(hide) rm -rf $@ $(zip_root)
 	$(hide) mkdir -p $(dir $@) $(zip_root)
 ifneq (,$(INSTALLED_RECOVERYIMAGE_TARGET)$(filter true,$(BOARD_USES_RECOVERY_AS_BOOT)))
@@ -1949,9 +1852,7 @@ ifdef PRODUCT_EXTRA_RECOVERY_KEYS
 endif
 	$(hide) echo 'mkbootimg_args=$(BOARD_MKBOOTIMG_ARGS)' >> $(zip_root)/META/misc_info.txt
 	$(hide) echo 'mkbootimg_version_args=$(INTERNAL_MKBOOTIMG_VERSION_ARGS)' >> $(zip_root)/META/misc_info.txt
-ifneq ($(SKIP_SET_METADATA),true)
 	$(hide) echo "use_set_metadata=1" >> $(zip_root)/META/misc_info.txt
-endif
 	$(hide) echo "multistage_support=1" >> $(zip_root)/META/misc_info.txt
 	$(hide) echo "update_rename_support=1" >> $(zip_root)/META/misc_info.txt
 	$(hide) echo "blockimgdiff_versions=1,2,3,4" >> $(zip_root)/META/misc_info.txt
@@ -2048,110 +1949,24 @@ INTERNAL_OTA_PACKAGE_TARGET := $(PRODUCT_OUT)/$(name).zip
 
 $(INTERNAL_OTA_PACKAGE_TARGET): KEY_CERT_PAIR := $(DEFAULT_KEY_CERT_PAIR)
 
-ifneq ($(CARBON_BUILD),)
-    $(INTERNAL_OTA_PACKAGE_TARGET): backuptool := true
-else
-    $(INTERNAL_OTA_PACKAGE_TARGET): backuptool := false
-endif
-
 ifeq ($(TARGET_OTA_ASSERT_DEVICE),)
     $(INTERNAL_OTA_PACKAGE_TARGET): override_device := auto
 else
     $(INTERNAL_OTA_PACKAGE_TARGET): override_device := $(TARGET_OTA_ASSERT_DEVICE)
 endif
 
-ifeq ($(TARGET_RELEASETOOL_OTA_FROM_TARGET_SCRIPT),)
-    OTA_FROM_TARGET_SCRIPT := ./build/tools/releasetools/ota_from_target_files
-else
-    OTA_FROM_TARGET_SCRIPT := $(TARGET_RELEASETOOL_OTA_FROM_TARGET_SCRIPT)
-endif
-
-ifeq ($(TARGET_UNIFIED_DEVICE),)
-    $(INTERNAL_OTA_PACKAGE_TARGET): override_prop := false
-else
-    $(INTERNAL_OTA_PACKAGE_TARGET): override_prop := true
-    ifeq ($(TARGET_OTA_ASSERT_DEVICE),)
-        $(INTERNAL_OTA_PACKAGE_TARGET): override_device := $(TARGET_DEVICE)
-    endif
-endif
-
-ifneq ($(TARGET_SETS_FSTAB),)
-    $(INTERNAL_OTA_PACKAGE_TARGET): mount_by_label := true
-else
-    $(INTERNAL_OTA_PACKAGE_TARGET): mount_by_label := false
-endif
-
 $(INTERNAL_OTA_PACKAGE_TARGET): $(BUILT_TARGET_FILES_PACKAGE)
-	@echo -e ${CL_YLW}"Package OTA:"${CL_RST}" $@"
+	@echo "Package OTA: $@"
 	$(hide) PATH=$(foreach p,$(INTERNAL_USERIMAGES_BINARY_PATHS),$(p):)$$PATH MKBOOTIMG=$(MKBOOTIMG) \
-	   $(OTA_FROM_TARGET_SCRIPT) -v \
-	   $(if $(CARBON_BUILD),, --block) \
+	   ./build/tools/releasetools/ota_from_target_files -v \
+	   --block \
 	   -p $(HOST_OUT) \
 	   -k $(KEY_CERT_PAIR) \
-	   --backup=$(backuptool) \
-	   --override_device=$(override_device) \
-	   --override_prop=$(override_prop) \
-	   --mount_by_label=$(mount_by_label) \
 	   $(if $(OEM_OTA_CONFIG), -o $(OEM_OTA_CONFIG)) \
-	   $(TARGET_RELEASETOOL_OTA_FROM_TARGET_ADDITIONAL_ARGS) \
 	   $(BUILT_TARGET_FILES_PACKAGE) $@
 
-CARBON_TARGET_PACKAGE := $(PRODUCT_OUT)/CARBON-$(CARBON_VERSION).zip
-
-# This is for PhaseBurn
-.PHONY: sandwich measandwich
-sandwich:
-	@echo ""
-	@echo -e ${CL_CYN}"                  Make me a sandwich.                              "${CL_RST}
-	@echo -e ${CL_CYN}"                          |                                        "${CL_RST}
-	@echo -e ${CL_CYN}"                          |		       What? Make it yourself."${CL_RST}
-	@echo -e ${CL_CYN}"                          |                             |          "${CL_RST}
-	@echo -e ${CL_CYN}"          sudo make me a sandwich.                      |          "${CL_RST}
-	@echo -e ${CL_CYN}"                          |                             |          "${CL_RST}
-	@echo -e ${CL_CYN}"                          |                           Okay         "${CL_RST}
-	@echo -e ${CL_CYN}"                          |                              \         "${CL_RST}
-	@echo -e ${CL_CYN}"                          |                              :#.       "${CL_RST}
-	@echo -e ${CL_CYN}"                          |                             ;\` .#      "${CL_RST}
-	@echo -e ${CL_CYN}"                          |                             +   '      "${CL_RST}
-	@echo -e ${CL_CYN}"                          |                            \`.   '      "${CL_RST}
-	@echo -e ${CL_CYN}"                         ,,                            ,    +      "${CL_RST}
-	@echo -e ${CL_CYN}"                        #\` @                           ,\`   @      "${CL_RST}
-	@echo -e ${CL_CYN}"                       ,    #                          \`;  .,      "${CL_RST}
-	@echo -e ${CL_CYN}"                       ;    +                           :#+#       "${CL_RST}
-	@echo -e ${CL_CYN}"                    :#+;,   :                             @        "${CL_RST}
-	@echo -e ${CL_CYN}"                    #  .@\`  +                            ,+#       "${CL_RST}
-	@echo -e ${CL_CYN}"                    +   #+##.                            #+..      "${CL_RST}
-	@echo -e ${CL_CYN}"                    '   \`'#                              ;+ #      "${CL_RST}
-	@echo -e ${CL_CYN}"                    ,    +#.,@::++                     .. #  ;.    "${CL_RST}
-	@echo -e ${CL_CYN}"                    .    @    \`,@ #                    #  :\`       "${CL_RST}
-	@echo -e ${CL_CYN}"                    \`     ,#@#+#+'                       ; #       "${CL_RST}
-	@echo -e ${CL_CYN}"                    .            .#                     .  \`.      "${CL_RST}
-	@echo -e ${CL_CYN}"                    \`            ,\`,                    +   #      "${CL_RST}
-	@echo -e ${CL_CYN}"                    :     \`\`\` \`  ; #                    ;   +      "${CL_RST}
-	@echo -e ${CL_CYN}"                     @@#;,...,:@@,  \`                   ,   ,\`     "${CL_RST}
-	@echo -e ${CL_CYN}"                      #,       #'                                  "${CL_RST}
-	@echo -e ${CL_CYN}"                      \`        \`                                   "${CL_RST}
-measandwich: sandwich
-
-.PHONY: otapackage carbon
+.PHONY: otapackage
 otapackage: $(INTERNAL_OTA_PACKAGE_TARGET)
-carbon: otapackage
-	$(hide) ln -f $(INTERNAL_OTA_PACKAGE_TARGET) $(CARBON_TARGET_PACKAGE)
-	$(hide) $(MD5SUM) $(CARBON_TARGET_PACKAGE) > $(CARBON_TARGET_PACKAGE).md5sum
-	@echo ""
-	@echo -e ${CL_YLW}"════════════════════════════════════════════════════════════════════════════════"${CL_RST}
-	@echo -e ${CL_BLU}" ██████╗ █████╗ ██████╗ ██████╗  ██████╗ ███╗   ██╗ ██████╗  ██████╗ ███╗   ███╗"${CL_RST}
-	@echo -e ${CL_BLU}"██╔════╝██╔══██╗██╔══██╗██╔══██╗██╔═══██╗████╗  ██║ ██╔══██╗██╔═══██╗████╗ ████║"${CL_RST}
-	@echo -e ${CL_BLU}"██║     ███████║██████╔╝██████╔╝██║   ██║██╔██╗ ██║ ██████╔╝██║   ██║██╔████╔██║"${CL_RST}
-	@echo -e ${CL_BLU}"██║     ██╔══██║██╔══██╗██╔══██╗██║   ██║██║╚██╗██║ ██╔══██╗██║   ██║██║╚██╔╝██║"${CL_RST}
-	@echo -e ${CL_BLU}"╚██████╗██║  ██║██║  ██║██████╔╝╚██████╔╝██║ ╚████║ ██║  ██║╚██████╔╝██║ ╚═╝ ██║"${CL_RST}
-	@echo -e ${CL_BLU}" ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝  ╚═════╝ ╚═╝  ╚═══╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝"${CL_RST}
-	@echo -e ${CL_RED}"                                   carbonrom.org                                "${CL_RST}
-	@echo -e ${CL_YLW}"════════════════════════════════════════════════════════════════════════════════"${CL_RST}
-	@echo -e ${CL_CYN}"Package zip: "${CL_MAG} $(CARBON_TARGET_PACKAGE)                                 ${CL_RST}
-	@echo -e ${CL_CYN}"Package md5: "${CL_MAG}" `cat $(CARBON_TARGET_PACKAGE).md5sum | cut -d ' ' -f 1`"${CL_RST}
-	@echo -e ${CL_CYN}"Package size:"${CL_MAG}" `ls -lah $(CARBON_TARGET_PACKAGE) | cut -d ' ' -f 5`   "${CL_RST}
-	@echo -e ${CL_YLW}"════════════════════════════════════════════════════════════════════════════════"${CL_RST}
 
 endif    # build_ota_package
 
@@ -2166,24 +1981,10 @@ name := $(name)-img-$(FILE_NAME_TAG)
 
 INTERNAL_UPDATE_PACKAGE_TARGET := $(PRODUCT_OUT)/$(name).zip
 
-ifeq ($(TARGET_RELEASETOOLS_EXTENSIONS),)
-# default to common dir for device vendor
-$(INTERNAL_UPDATE_PACKAGE_TARGET): extensions := $(TARGET_DEVICE_DIR)/../common
-else
-$(INTERNAL_UPDATE_PACKAGE_TARGET): extensions := $(TARGET_RELEASETOOLS_EXTENSIONS)
-endif
-
-ifeq ($(TARGET_RELEASETOOL_IMG_FROM_TARGET_SCRIPT),)
-    IMG_FROM_TARGET_SCRIPT := ./build/tools/releasetools/img_from_target_files
-else
-    IMG_FROM_TARGET_SCRIPT := $(TARGET_RELEASETOOL_IMG_FROM_TARGET_SCRIPT)
-endif
-
-$(INTERNAL_UPDATE_PACKAGE_TARGET): $(BUILT_TARGET_FILES_PACKAGE) $(DISTTOOLS)
-	@echo -e ${CL_YLW}"Package:"${CL_RST}" $@"
+$(INTERNAL_UPDATE_PACKAGE_TARGET): $(BUILT_TARGET_FILES_PACKAGE)
+	@echo "Package: $@"
 	$(hide) PATH=$(foreach p,$(INTERNAL_USERIMAGES_BINARY_PATHS),$(p):)$$PATH MKBOOTIMG=$(MKBOOTIMG) \
-	   $(IMG_FROM_TARGET_SCRIPT) -v \
-	   -s $(extensions) \
+	   ./build/tools/releasetools/img_from_target_files -v \
 	   -p $(HOST_OUT) \
 	   $(BUILT_TARGET_FILES_PACKAGE) $@
 
@@ -2223,7 +2024,7 @@ name := $(name)-apps-$(FILE_NAME_TAG)
 
 APPS_ZIP := $(PRODUCT_OUT)/$(name).zip
 $(APPS_ZIP): $(INSTALLED_SYSTEMIMAGE)
-	@echo -e ${CL_YLW}"Package apps:"${CL_RST}" $@"
+	@echo "Package apps: $@"
 	$(hide) rm -rf $@
 	$(hide) mkdir -p $(dir $@)
 	$(hide) apps_to_zip=`find $(TARGET_OUT_APPS) $(TARGET_OUT_APPS_PRIVILEGED) -mindepth 2 -maxdepth 3 -name "*.apk"`; \
@@ -2242,7 +2043,7 @@ ifeq (true,$(EMMA_INSTRUMENT))
 EMMA_META_ZIP := $(PRODUCT_OUT)/emma_meta.zip
 # the dependency will be set up later in build/core/main.mk.
 $(EMMA_META_ZIP) :
-	@echo -e ${PRT_HST}"Collecting Emma coverage meta files."${CL_RST}" $@"
+	@echo "Collecting Emma coverage meta files."
 	$(hide) find $(TARGET_COMMON_OUT_ROOT) $(HOST_COMMON_OUT_ROOT) -name "coverage.em" | \
 		zip -@ -qX $@
 
@@ -2290,8 +2091,9 @@ name := $(TARGET_PRODUCT)-emulator-$(FILE_NAME_TAG)
 INTERNAL_EMULATOR_PACKAGE_TARGET := $(PRODUCT_OUT)/$(name).zip
 
 $(INTERNAL_EMULATOR_PACKAGE_TARGET): $(INTERNAL_EMULATOR_PACKAGE_FILES)
-	@echo -e ${CL_YLW}"Package:"${CL_RST}" $@"
+	@echo "Package: $@"
 	$(hide) zip -qjX $@ $(INTERNAL_EMULATOR_PACKAGE_FILES)
+
 endif
 # -----------------------------------------------------------------
 # Old PDK stuffs, retired
@@ -2390,7 +2192,7 @@ $(INTERNAL_SDK_TARGET): PRIVATE_INPUT_FILES := $(sdk_atree_files)
 #SDK_GNU_ERROR := true
 
 $(INTERNAL_SDK_TARGET): $(deps)
-	@echo -e ${PRT_HST}"Package SDK:"${CL_RST}" $@"
+	@echo "Package SDK: $@"
 	$(hide) rm -rf $(PRIVATE_DIR) $@
 	$(hide) for f in $(target_gnu_MODULES); do \
 	  if [ -f $$f ]; then \

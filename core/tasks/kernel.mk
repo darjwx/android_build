@@ -84,7 +84,6 @@ ifneq ($(BOARD_KERNEL_IMAGE_NAME),)
 else
 	TARGET_PREBUILT_INT_KERNEL := $(KERNEL_OUT)/arch/$(TARGET_ARCH)/boot/zImage
 	TARGET_PREBUILT_INT_KERNEL_TYPE := zImage
->>>>>>> 3214c52... build: Inline kernel building as a buildtime task
 endif
 
 ## Do be discontinued in a future version. Notify builder about target
